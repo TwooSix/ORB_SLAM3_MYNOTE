@@ -298,6 +298,7 @@ bool LocalMapping::CheckNewKeyFrames()
 void LocalMapping::ProcessNewKeyFrame()
 {
     {
+        // 取出一帧新的关键帧
         unique_lock<mutex> lock(mMutexNewKFs);
         mpCurrentKeyFrame = mlNewKeyFrames.front();
         mlNewKeyFrames.pop_front();
@@ -308,7 +309,7 @@ void LocalMapping::ProcessNewKeyFrame()
 
     // Associate MapPoints to the new keyframe and update normal and descriptor
     const vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
-
+    // 遍历当前关键帧的所有地图点
     for(size_t i=0; i<vpMapPointMatches.size(); i++)
     {
         MapPoint* pMP = vpMapPointMatches[i];
@@ -316,14 +317,20 @@ void LocalMapping::ProcessNewKeyFrame()
         {
             if(!pMP->isBad())
             {
+                // 如果当前地图点不在当前关键帧中（可能是局部地图点投过来的）
                 if(!pMP->IsInKeyFrame(mpCurrentKeyFrame))
                 {
+                    // 添加进当前关键帧
                     pMP->AddObservation(mpCurrentKeyFrame, i);
+                    // 更新平均观测方向和观测深度
                     pMP->UpdateNormalAndDepth();
+                    // 更新最佳描述子
                     pMP->ComputeDistinctiveDescriptors();
                 }
                 else // this can only happen for new stereo points inserted by the Tracking
                 {
+                    // TODO 没懂；但反正这种情况下会添加进mlpRecentAddedMapPoints
+                    // mlpRecentAddedMapPoints内的地图点会在MapPointCulling()中被筛选后再添加进地图
                     mlpRecentAddedMapPoints.push_back(pMP);
                 }
             }
@@ -331,6 +338,7 @@ void LocalMapping::ProcessNewKeyFrame()
     }
 
     // Update links in the Covisibility Graph
+    // 更新共视图
     mpCurrentKeyFrame->UpdateConnections();
 
     // Insert Keyframe in Map
@@ -345,41 +353,49 @@ void LocalMapping::EmptyQueue()
 
 void LocalMapping::MapPointCulling()
 {
+    """筛选刚刚添加的地图点，剔除质量不好的地图点
+    """    
     // Check Recent Added MapPoints
     list<MapPoint*>::iterator lit = mlpRecentAddedMapPoints.begin();
     const unsigned long int nCurrentKFid = mpCurrentKeyFrame->mnId;
-
+    // 不同相机设置不同筛选阈值
     int nThObs;
     if(mbMonocular)
-        nThObs = 2;
+        nThObs = 2; // 单目为2
     else
-        nThObs = 3;
+        nThObs = 3; // 双目，深度为3
     const int cnThObs = nThObs;
 
     int borrar = mlpRecentAddedMapPoints.size();
-
+    // 遍历刚刚添加的地图点，删除不合格的地图点
     while(lit!=mlpRecentAddedMapPoints.end())
     {
         MapPoint* pMP = *lit;
-
+        // 坏点
         if(pMP->isBad())
             lit = mlpRecentAddedMapPoints.erase(lit);
+        // 被观测到的帧数小于25%
         else if(pMP->GetFoundRatio()<0.25f)
         {
-            pMP->SetBadFlag();
+            pMP->SetBadFlag(); // 设置坏点，准备删除
             lit = mlpRecentAddedMapPoints.erase(lit);
         }
+        // 距离该点首次被观测到时已过去了至少2个关键帧，但是该点被观测到的相机数<=阈值
+        // （说明该点只被最初的那帧相机观测到，后面就没观测到了）
         else if(((int)nCurrentKFid-(int)pMP->mnFirstKFid)>=2 && pMP->Observations()<=cnThObs)
         {
             pMP->SetBadFlag();
             lit = mlpRecentAddedMapPoints.erase(lit);
         }
+        // 距离该点首次被观测到时已过去了至少3个关键帧
         else if(((int)nCurrentKFid-(int)pMP->mnFirstKFid)>=3)
+            // 质量不错，没有删除
             lit = mlpRecentAddedMapPoints.erase(lit);
         else
         {
+            // 其他情况跳过
             lit++;
-            borrar--;
+            borrar--; // 不知道干嘛用的，调试？
         }
     }
 }
@@ -387,37 +403,43 @@ void LocalMapping::MapPointCulling()
 
 void LocalMapping::CreateNewMapPoints()
 {
+    """根据共视关键帧进行匹配，生成更多的地图点
+    """    
     // Retrieve neighbor keyframes in covisibility graph
+    // 选择的最佳共视帧的数量，双目/RGBD为10个，单目为30
     int nn = 10;
     // For stereo inertial case
     if(mbMonocular)
         nn=30;
     vector<KeyFrame*> vpNeighKFs = mpCurrentKeyFrame->GetBestCovisibilityKeyFrames(nn);
-
+    // 如果是IMU模式，则用上一个关键帧来在共视帧不够的时候作为补充
     if (mbInertial)
     {
         KeyFrame* pKF = mpCurrentKeyFrame;
         int count=0;
+        // 共视帧数量不够，且上一个关键帧不为空，补充的数量最大为nn
         while((vpNeighKFs.size()<=nn)&&(pKF->mPrevKF)&&(count++<nn))
         {
+            // 如果当前帧不在共视帧中，则添加进末尾
             vector<KeyFrame*>::iterator it = std::find(vpNeighKFs.begin(), vpNeighKFs.end(), pKF->mPrevKF);
             if(it==vpNeighKFs.end())
                 vpNeighKFs.push_back(pKF->mPrevKF);
+            // 循环添加上一个关键帧
             pKF = pKF->mPrevKF;
         }
     }
-
+    // 匹配阈值
     float th = 0.6f;
 
     ORBmatcher matcher(th,false);
-
+    // 当前帧位姿变量初始化
     Sophus::SE3<float> sophTcw1 = mpCurrentKeyFrame->GetPose();
     Eigen::Matrix<float,3,4> eigTcw1 = sophTcw1.matrix3x4();
     Eigen::Matrix<float,3,3> Rcw1 = eigTcw1.block<3,3>(0,0);
     Eigen::Matrix<float,3,3> Rwc1 = Rcw1.transpose();
     Eigen::Vector3f tcw1 = sophTcw1.translation();
     Eigen::Vector3f Ow1 = mpCurrentKeyFrame->GetCameraCenter();
-
+    // 当前帧内参变量初始化
     const float &fx1 = mpCurrentKeyFrame->fx;
     const float &fy1 = mpCurrentKeyFrame->fy;
     const float &cx1 = mpCurrentKeyFrame->cx;
@@ -426,32 +448,39 @@ void LocalMapping::CreateNewMapPoints()
     const float &invfy1 = mpCurrentKeyFrame->invfy;
 
     const float ratioFactor = 1.5f*mpCurrentKeyFrame->mfScaleFactor;
+    // 统计点数用（应该是调试用的）
     int countStereo = 0;
     int countStereoGoodProj = 0;
     int countStereoAttempt = 0;
     int totalStereoPts = 0;
     // Search matches with epipolar restriction and triangulate
+    // 根据对极约束进行匹配，三角化
     for(size_t i=0; i<vpNeighKFs.size(); i++)
     {
+        // 检测是否有新的关键帧，如果有则中断后续处理，优先处理新的关键帧，保证实时性
         if(i>0 && CheckNewKeyFrames())
             return;
 
         KeyFrame* pKF2 = vpNeighKFs[i];
-
+        
         GeometricCamera* pCamera1 = mpCurrentKeyFrame->mpCamera, *pCamera2 = pKF2->mpCamera;
 
         // Check first that baseline is not too short
         Eigen::Vector3f Ow2 = pKF2->GetCameraCenter();
+        // 计算两帧基线向量和长度
         Eigen::Vector3f vBaseline = Ow2-Ow1;
         const float baseline = vBaseline.norm();
-
+        // 判断两帧视差，足够大才能用来三角化
         if(!mbMonocular)
         {
+            // 如果是双目，则同相机的基线比较
+            // 两帧基线长度短于相机基线长度则不用来三角化
             if(baseline<pKF2->mb)
                 continue;
         }
         else
         {
+            // 如果是单目，则计算特征点深度的中值，如果基线/中值<0.01则不用来三角化
             const float medianDepthKF2 = pKF2->ComputeSceneMedianDepth(2);
             const float ratioBaselineDepth = baseline/medianDepthKF2;
 
@@ -461,10 +490,11 @@ void LocalMapping::CreateNewMapPoints()
 
         // Search matches that fullfil epipolar constraint
         vector<pair<size_t,size_t> > vMatchedIndices;
+        // IMU+RECENTLY_LOST+已初始化优化三次（TODO，给后面找匹配点用的一个状态位，还没看懒的看）
         bool bCoarse = mbInertial && mpTracker->mState==Tracking::RECENTLY_LOST && mpCurrentKeyFrame->GetMap()->GetIniertialBA2();
-
+        // 通过对极约束找到两帧的匹配点（已经生成了地图点的特征点会跳过）
         matcher.SearchForTriangulation(mpCurrentKeyFrame,pKF2,vMatchedIndices,false,bCoarse);
-
+        // 第二帧的位姿，参数初始化
         Sophus::SE3<float> sophTcw2 = pKF2->GetPose();
         Eigen::Matrix<float,3,4> eigTcw2 = sophTcw2.matrix3x4();
         Eigen::Matrix<float,3,3> Rcw2 = eigTcw2.block<3,3>(0,0);
@@ -480,14 +510,16 @@ void LocalMapping::CreateNewMapPoints()
 
         // Triangulate each match
         const int nmatches = vMatchedIndices.size();
+        // 对每个新得到的匹配点进行三角化得地图点
         for(int ikp=0; ikp<nmatches; ikp++)
         {
+            // 两点下标
             const int &idx1 = vMatchedIndices[ikp].first;
             const int &idx2 = vMatchedIndices[ikp].second;
-
+            // 根据相机类型，取出对应的特征点
             const cv::KeyPoint &kp1 = (mpCurrentKeyFrame -> NLeft == -1) ? mpCurrentKeyFrame->mvKeysUn[idx1]
                                                                          : (idx1 < mpCurrentKeyFrame -> NLeft) ? mpCurrentKeyFrame -> mvKeys[idx1]
-                                                                                                               : mpCurrentKeyFrame -> mvKeysRight[idx1 - mpCurrentKeyFrame -> NLeft];
+            // TODO 不知道是什么                                                                                                   : mpCurrentKeyFrame -> mvKeysRight[idx1 - mpCurrentKeyFrame -> NLeft];
             const float kp1_ur=mpCurrentKeyFrame->mvuRight[idx1];
             bool bStereo1 = (!mpCurrentKeyFrame->mpCamera2 && kp1_ur>=0);
             const bool bRight1 = (mpCurrentKeyFrame -> NLeft == -1 || idx1 < mpCurrentKeyFrame -> NLeft) ? false
@@ -501,7 +533,7 @@ void LocalMapping::CreateNewMapPoints()
             bool bStereo2 = (!pKF2->mpCamera2 && kp2_ur>=0);
             const bool bRight2 = (pKF2 -> NLeft == -1 || idx2 < pKF2 -> NLeft) ? false
                                                                                : true;
-
+            // 如果是两个相机时，根据不同情况获取两个相机的位姿和光心位置
             if(mpCurrentKeyFrame->mpCamera2 && pKF2->mpCamera2){
                 if(bRight1 && bRight2){
                     sophTcw1 = mpCurrentKeyFrame->GetRightPose();
@@ -539,7 +571,7 @@ void LocalMapping::CreateNewMapPoints()
 
                     sophTcw2 = pKF2->GetPose();
                     Ow2 = pKF2->GetCameraCenter();
-
+ 
                     pCamera1 = mpCurrentKeyFrame->mpCamera;
                     pCamera2 = pKF2->mpCamera;
                 }
@@ -555,30 +587,35 @@ void LocalMapping::CreateNewMapPoints()
             }
 
             // Check parallax between rays
+            // 将2D点反投影到相机坐标系下的3D点
             Eigen::Vector3f xn1 = pCamera1->unprojectEig(kp1.pt);
             Eigen::Vector3f xn2 = pCamera2->unprojectEig(kp2.pt);
-
+            // 通过位姿变换到世界坐标系下
             Eigen::Vector3f ray1 = Rwc1 * xn1;
             Eigen::Vector3f ray2 = Rwc2 * xn2;
+            // 两点射线的夹角余弦值
             const float cosParallaxRays = ray1.dot(ray2)/(ray1.norm() * ray2.norm());
 
+            // 初始化用于双目时的夹角余弦值，+1超过cos的值域，方便后面取min
             float cosParallaxStereo = cosParallaxRays+1;
             float cosParallaxStereo1 = cosParallaxStereo;
             float cosParallaxStereo2 = cosParallaxStereo;
-
+            // 若第一帧是双目，则计算第一帧通过双目自身计算的夹角余弦值
             if(bStereo1)
                 cosParallaxStereo1 = cos(2*atan2(mpCurrentKeyFrame->mb/2,mpCurrentKeyFrame->mvDepth[idx1]));
+            // 若第二帧是双目，则计算第二帧通过双目自身计算的夹角余弦值
             else if(bStereo2)
                 cosParallaxStereo2 = cos(2*atan2(pKF2->mb/2,pKF2->mvDepth[idx2]));
 
             if (bStereo1 || bStereo2) totalStereoPts++;
-            
+            // 取两帧中较大的视差角作为双目的视差角
             cosParallaxStereo = min(cosParallaxStereo1,cosParallaxStereo2);
 
             Eigen::Vector3f x3D;
 
             bool goodProj = false;
             bool bPointStereo = false;
+            // 如果两帧的视差角大于双目的视差角（余弦值更小），则通过两帧三角化来获得三维点
             if(cosParallaxRays<cosParallaxStereo && cosParallaxRays>0 && (bStereo1 || bStereo2 ||
                                                                           (cosParallaxRays<0.9996 && mbInertial) || (cosParallaxRays<0.9998 && !mbInertial)))
             {
@@ -586,6 +623,7 @@ void LocalMapping::CreateNewMapPoints()
                 if(!goodProj)
                     continue;
             }
+            // 否则通过视差角更大的那一帧双目相机来获得三维点
             else if(bStereo1 && cosParallaxStereo1<cosParallaxStereo2)
             {
                 countStereoAttempt++;
@@ -610,6 +648,7 @@ void LocalMapping::CreateNewMapPoints()
                 continue;
 
             //Check triangulation in front of cameras
+            // 检测深度值是否>0
             float z1 = Rcw1.row(2).dot(x3D) + tcw1(2);
             if(z1<=0)
                 continue;
@@ -619,23 +658,25 @@ void LocalMapping::CreateNewMapPoints()
                 continue;
 
             //Check reprojection error in first keyframe
+            // 计算第一帧的重投影误差
             const float &sigmaSquare1 = mpCurrentKeyFrame->mvLevelSigma2[kp1.octave];
             const float x1 = Rcw1.row(0).dot(x3D)+tcw1(0);
             const float y1 = Rcw1.row(1).dot(x3D)+tcw1(1);
             const float invz1 = 1.0/z1;
-
+            // 单目情况下
             if(!bStereo1)
             {
                 cv::Point2f uv1 = pCamera1->project(cv::Point3f(x1,y1,z1));
                 float errX1 = uv1.x - kp1.pt.x;
                 float errY1 = uv1.y - kp1.pt.y;
-
+                // x,y的误差要满足卡方校验阈值
                 if((errX1*errX1+errY1*errY1)>5.991*sigmaSquare1)
                     continue;
 
             }
             else
             {
+                // 双目情况
                 float u1 = fx1*x1*invz1+cx1;
                 float u1_r = u1 - mpCurrentKeyFrame->mbf*invz1;
                 float v1 = fy1*y1*invz1+cy1;
@@ -647,6 +688,7 @@ void LocalMapping::CreateNewMapPoints()
             }
 
             //Check reprojection error in second keyframe
+            // 第二帧重投影误差
             const float sigmaSquare2 = pKF2->mvLevelSigma2[kp2.octave];
             const float x2 = Rcw2.row(0).dot(x3D)+tcw2(0);
             const float y2 = Rcw2.row(1).dot(x3D)+tcw2(1);
@@ -672,6 +714,8 @@ void LocalMapping::CreateNewMapPoints()
             }
 
             //Check scale consistency
+            // 检测尺度一致性
+            // 获取相机光心到3D点的两个向量及长度
             Eigen::Vector3f normal1 = x3D - Ow1;
             float dist1 = normal1.norm();
 
@@ -683,14 +727,16 @@ void LocalMapping::CreateNewMapPoints()
 
             if(mbFarPoints && (dist1>=mThFarPoints||dist2>=mThFarPoints)) // MODIFICATION
                 continue;
-
+            // 距离比例
             const float ratioDist = dist2/dist1;
+            // 金字塔比例
             const float ratioOctave = mpCurrentKeyFrame->mvScaleFactors[kp1.octave]/pKF2->mvScaleFactors[kp2.octave];
-
+            // 距离比例不应该和金字塔比例差太多
             if(ratioDist*ratioFactor<ratioOctave || ratioDist>ratioOctave*ratioFactor)
                 continue;
 
             // Triangulation is succesfull
+            // 检查完毕，质量不错，作为地图点加入地图
             MapPoint* pMP = new MapPoint(x3D, mpCurrentKeyFrame, mpAtlas->GetCurrentMap());
             if (bPointStereo)
                 countStereo++;
@@ -713,15 +759,20 @@ void LocalMapping::CreateNewMapPoints()
 
 void LocalMapping::SearchInNeighbors()
 {
+    """搜索并融合当前帧和相邻帧的地图点
+    """    
     // Retrieve neighbor keyframes
+    // 设置单目和双目搜索的最佳共视帧数量
     int nn = 10;
     if(mbMonocular)
         nn=30;
+    // 获取前nn个最佳共视帧（一级关键帧）
     const vector<KeyFrame*> vpNeighKFs = mpCurrentKeyFrame->GetBestCovisibilityKeyFrames(nn);
     vector<KeyFrame*> vpTargetKFs;
     for(vector<KeyFrame*>::const_iterator vit=vpNeighKFs.begin(), vend=vpNeighKFs.end(); vit!=vend; vit++)
     {
         KeyFrame* pKFi = *vit;
+        // 剔除坏帧或已添加过的帧
         if(pKFi->isBad() || pKFi->mnFuseTargetForKF == mpCurrentKeyFrame->mnId)
             continue;
         vpTargetKFs.push_back(pKFi);
@@ -730,8 +781,10 @@ void LocalMapping::SearchInNeighbors()
 
     // Add some covisible of covisible
     // Extend to some second neighbors if abort is not requested
+    // 遍历每个一级关键帧
     for(int i=0, imax=vpTargetKFs.size(); i<imax; i++)
     {
+        // 获取二级关键帧并添加
         const vector<KeyFrame*> vpSecondNeighKFs = vpTargetKFs[i]->GetBestCovisibilityKeyFrames(20);
         for(vector<KeyFrame*>::const_iterator vit2=vpSecondNeighKFs.begin(), vend2=vpSecondNeighKFs.end(); vit2!=vend2; vit2++)
         {
@@ -746,6 +799,7 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Extend to temporal neighbors
+    // 如果是IMU模式，如果相邻帧数量不够，则可以用上一个关键帧来补充
     if(mbInertial)
     {
         KeyFrame* pKFi = mpCurrentKeyFrame->mPrevKF;
@@ -763,6 +817,7 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Search matches by projection from current KF in target KFs
+    // 将当前帧的地图点投影到相邻帧中，寻找相同的地图点，进行融合
     ORBmatcher matcher;
     vector<MapPoint*> vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
     for(vector<KeyFrame*>::iterator vit=vpTargetKFs.begin(), vend=vpTargetKFs.end(); vit!=vend; vit++)
@@ -778,6 +833,7 @@ void LocalMapping::SearchInNeighbors()
         return;
 
     // Search matches by projection from target KFs in current KF
+    // 将相邻帧的地图点投影到当前帧中，寻找相同的地图点，进行融合
     vector<MapPoint*> vpFuseCandidates;
     vpFuseCandidates.reserve(vpTargetKFs.size()*vpMapPointMatches.size());
 
@@ -790,6 +846,7 @@ void LocalMapping::SearchInNeighbors()
         for(vector<MapPoint*>::iterator vitMP=vpMapPointsKFi.begin(), vendMP=vpMapPointsKFi.end(); vitMP!=vendMP; vitMP++)
         {
             MapPoint* pMP = *vitMP;
+            // 筛选地图点，如果不是坏点以及未添加进融合候选列表，则加进候选列表
             if(!pMP)
                 continue;
             if(pMP->isBad() || pMP->mnFuseCandidateForKF == mpCurrentKeyFrame->mnId)
@@ -798,12 +855,14 @@ void LocalMapping::SearchInNeighbors()
             vpFuseCandidates.push_back(pMP);
         }
     }
-
+    // 将候选列表的地图点投影到当前帧，进行融合
     matcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates);
+    // 如果是双目，额外再投影到右目，进行融合
     if(mpCurrentKeyFrame->NLeft != -1) matcher.Fuse(mpCurrentKeyFrame,vpFuseCandidates,true);
 
 
     // Update points
+    // 更新地图点的描述子、深度、平均观测方向等信息
     vpMapPointMatches = mpCurrentKeyFrame->GetMapPointMatches();
     for(size_t i=0, iend=vpMapPointMatches.size(); i<iend; i++)
     {
@@ -819,6 +878,7 @@ void LocalMapping::SearchInNeighbors()
     }
 
     // Update connections in covisibility graph
+    // 更新共视图
     mpCurrentKeyFrame->UpdateConnections();
 }
 
@@ -901,14 +961,18 @@ void LocalMapping::InterruptBA()
 
 void LocalMapping::KeyFrameCulling()
 {
+    """删除冗余关键帧，90%以上地图点能被其他3个以上的关键帧看到的关键帧为冗余关键帧
+    """    
     // Check redundant keyframes (only local keyframes)
     // A keyframe is considered redundant if the 90% of the MapPoints it sees, are seen
     // in at least other 3 keyframes (in the same or finer scale)
     // We only consider close stereo points
     const int Nd = 21;
+    // 更新共视关系
     mpCurrentKeyFrame->UpdateBestCovisibles();
+    // 获取当前帧的所有共视关键帧
     vector<KeyFrame*> vpLocalKeyFrames = mpCurrentKeyFrame->GetVectorCovisibleKeyFrames();
-
+    // 
     float redundant_th;
     if(!mbInertial)
         redundant_th = 0.9;
@@ -935,20 +999,22 @@ void LocalMapping::KeyFrameCulling()
     }
 
 
-
+    // 遍历所有共视关键帧
     for(vector<KeyFrame*>::iterator vit=vpLocalKeyFrames.begin(), vend=vpLocalKeyFrames.end(); vit!=vend; vit++)
     {
         count++;
         KeyFrame* pKF = *vit;
-
+        // 跳过第一帧或坏帧
         if((pKF->mnId==pKF->GetMap()->GetInitKFid()) || pKF->isBad())
             continue;
+        // 获取共视关键帧的地图点
         const vector<MapPoint*> vpMapPoints = pKF->GetMapPointMatches();
-
+        // 设置观测相机数阈值（为3）
         int nObs = 3;
         const int thObs=nObs;
         int nRedundantObservations=0;
         int nMPs=0;
+        // 遍历所有地图点
         for(size_t i=0, iend=vpMapPoints.size(); i<iend; i++)
         {
             MapPoint* pMP = vpMapPoints[i];
@@ -958,18 +1024,23 @@ void LocalMapping::KeyFrameCulling()
                 {
                     if(!mbMonocular)
                     {
+                        // 如果不是单目模式，则可以通过深度跳过深度不合理的点
                         if(pKF->mvDepth[i]>pKF->mThDepth || pKF->mvDepth[i]<0)
                             continue;
                     }
 
                     nMPs++;
+                    // 如果当前地图点被观测的数量>3
                     if(pMP->Observations()>thObs)
                     {
+                        // 获取当前共视关键帧的金字塔层级
                         const int &scaleLevel = (pKF -> NLeft == -1) ? pKF->mvKeysUn[i].octave
                                                                      : (i < pKF -> NLeft) ? pKF -> mvKeys[i].octave
                                                                                           : pKF -> mvKeysRight[i].octave;
+                        // 获取所有观测帧
                         const map<KeyFrame*, tuple<int,int>> observations = pMP->GetObservations();
                         int nObs=0;
+                        // 遍历观测帧
                         for(map<KeyFrame*, tuple<int,int>>::const_iterator mit=observations.begin(), mend=observations.end(); mit!=mend; mit++)
                         {
                             KeyFrame* pKFi = mit->first;
@@ -978,6 +1049,7 @@ void LocalMapping::KeyFrameCulling()
                             tuple<int,int> indexes = mit->second;
                             int leftIndex = get<0>(indexes), rightIndex = get<1>(indexes);
                             int scaleLeveli = -1;
+                            // 获取观测帧的金字塔层级
                             if(pKFi -> NLeft == -1)
                                 scaleLeveli = pKFi->mvKeysUn[leftIndex].octave;
                             else {
@@ -990,37 +1062,43 @@ void LocalMapping::KeyFrameCulling()
                                                                                                   : scaleLeveli;
                                 }
                             }
-
+                            // 如果当前帧地图点的金字塔层级低于该共视关键帧地图点的金字塔层级（也就是信息更准确）
                             if(scaleLeveli<=scaleLevel+1)
                             {
+                                // 则认为是观测到了同一个地图点，统计观测数量
                                 nObs++;
-                                if(nObs>thObs)
+                                if(nObs>thObs) // 如果观测数量已经大于阈值，则可以跳过该地图点
                                     break;
                             }
                         }
                         if(nObs>thObs)
                         {
+                            // 统计被大于阈值(3)的帧数所观测到的地图点数量
                             nRedundantObservations++;
                         }
                     }
                 }
             }
         }
-
+        // 如果共视观测点数量>阈值（90%）*所有地图点数量，则认为该关键帧是冗余关键帧
         if(nRedundantObservations>redundant_th*nMPs)
         {
+            // 如果是IMU模式
             if (mbInertial)
             {
+                // 关键帧数量<=Nd个，数量太少，不删除
                 if (mpAtlas->KeyFramesInMap()<=Nd)
                     continue;
-
+                // 如果该帧是当前帧的相邻帧（id差1），则不删除
                 if(pKF->mnId>(mpCurrentKeyFrame->mnId-2))
                     continue;
-
+                // 如果该帧有前后帧的情况下
                 if(pKF->mPrevKF && pKF->mNextKF)
                 {
                     const float t = pKF->mNextKF->mTimeStamp-pKF->mPrevKF->mTimeStamp;
-
+                    // 且已经初始化了Imu的情况下
+                    // 不是最后一帧，且前后帧时间差距不太大<3s
+                    // 或前后帧时间差距太小<0.5s，则可以删
                     if((bInitImu && (pKF->mnId<last_ID) && t<3.) || (t<0.5))
                     {
                         pKF->mNextKF->mpImuPreintegrated->MergePrevious(pKF->mpImuPreintegrated);
@@ -1030,6 +1108,10 @@ void LocalMapping::KeyFrameCulling()
                         pKF->mPrevKF = NULL;
                         pKF->SetBadFlag();
                     }
+                    // 或没完成初始化第三阶段的情况下
+                    // 1. 前后帧IMU积分的距离<0.02m
+                    // 2. 前后帧时间差距太小<3s
+                    // 则可以删除
                     else if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2() && ((pKF->GetImuPosition()-pKF->mPrevKF->GetImuPosition()).norm()<0.02) && (t<3))
                     {
                         pKF->mNextKF->mpImuPreintegrated->MergePrevious(pKF->mpImuPreintegrated);
@@ -1043,9 +1125,11 @@ void LocalMapping::KeyFrameCulling()
             }
             else
             {
+                // 非IMU模式直接删除该帧
                 pKF->SetBadFlag();
             }
         }
+        // 删除的帧太多就不删了
         if((count > 20 && mbAbortBA) || count>100)
         {
             break;

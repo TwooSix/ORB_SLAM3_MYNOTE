@@ -813,6 +813,11 @@ void Optimizer::FullInertialBA(Map *pMap, int its, const bool bFixLocal, const l
 
 int Optimizer::PoseOptimization(Frame *pFrame)
 {
+    """纯视觉且仅优化位姿
+
+    Returns:
+        _type_: _description_
+    """
     g2o::SparseOptimizer optimizer;
     g2o::BlockSolver_6_3::LinearSolverType * linearSolver;
 
@@ -861,8 +866,9 @@ int Optimizer::PoseOptimization(Frame *pFrame)
         if(pMP)
         {
             //Conventional SLAM
+            // 若不存在第二个相机
             if(!pFrame->mpCamera2){
-                // Monocular observation
+                // 且没有右图，则为单目的情况下
                 if(pFrame->mvuRight[i]<0)
                 {
                     nInitialCorrespondences++;
@@ -891,6 +897,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                     vpEdgesMono.push_back(e);
                     vnIndexEdgeMono.push_back(i);
                 }
+                // 有右图，则为双目
                 else  // Stereo observation
                 {
                     nInitialCorrespondences++;
@@ -927,11 +934,12 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                 }
             }
             //SLAM with respect a rigid body
+            // 两个单目相机的情况下
             else{
                 nInitialCorrespondences++;
 
                 cv::KeyPoint kpUn;
-
+                // 左相机
                 if (i < pFrame->Nleft) {    //Left camera observation
                     kpUn = pFrame->mvKeys[i];
 
@@ -959,6 +967,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
                     vpEdgesMono.push_back(e);
                     vnIndexEdgeMono.push_back(i);
                 }
+                // 右相机
                 else {
                     kpUn = pFrame->mvKeysRight[i - pFrame->Nleft];
 
@@ -995,7 +1004,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
 
     if(nInitialCorrespondences<3)
         return 0;
-
+    // 开始优化，总共优化4次，每次优化后剔除一次outlier再进行优化，单次优化迭代10次
     // We perform 4 optimizations, after each optimization we classify observation as inlier/outlier
     // At the next optimization, outliers are not included, but at the end they can be classified as inliers again.
     const float chi2Mono[4]={5.991,5.991,5.991,5.991};
@@ -1104,6 +1113,7 @@ int Optimizer::PoseOptimization(Frame *pFrame)
     }    
 
     // Recover optimized pose and return number of inliers
+    // 得到优化后的位姿和inlier数量并返回
     g2o::VertexSE3Expmap* vSE3_recov = static_cast<g2o::VertexSE3Expmap*>(optimizer.vertex(0));
     g2o::SE3Quat SE3quat_recov = vSE3_recov->estimate();
     Sophus::SE3<float> pose(SE3quat_recov.rotation().cast<float>(),

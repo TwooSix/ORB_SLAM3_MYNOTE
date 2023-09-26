@@ -656,48 +656,56 @@ Eigen::Vector3f Frame::inRefCoordinates(Eigen::Vector3f pCw)
 
 vector<size_t> Frame::GetFeaturesInArea(const float &x, const float  &y, const float  &r, const int minLevel, const int maxLevel, const bool bRight) const
 {
+    """找到以(x,y)为中心，半径为r的圆形内，金字塔层级在[minLevel,maxLevel]之间的特征点
+
+    Returns:
+        _type_: _description_
+    """    
     vector<size_t> vIndices;
     vIndices.reserve(N);
 
     float factorX = r;
     float factorY = r;
-
+    // 范围左边界所属的网格索引
     const int nMinCellX = max(0,(int)floor((x-mnMinX-factorX)*mfGridElementWidthInv));
     if(nMinCellX>=FRAME_GRID_COLS)
     {
         return vIndices;
     }
-
+    // 范围右边界所属的网格索引
     const int nMaxCellX = min((int)FRAME_GRID_COLS-1,(int)ceil((x-mnMinX+factorX)*mfGridElementWidthInv));
     if(nMaxCellX<0)
     {
         return vIndices;
     }
 
+    // 范围上边界所属的网格索引
     const int nMinCellY = max(0,(int)floor((y-mnMinY-factorY)*mfGridElementHeightInv));
     if(nMinCellY>=FRAME_GRID_ROWS)
     {
         return vIndices;
     }
-
+    // 范围下边界所属的网格索引
     const int nMaxCellY = min((int)FRAME_GRID_ROWS-1,(int)ceil((y-mnMinY+factorY)*mfGridElementHeightInv));
     if(nMaxCellY<0)
     {
         return vIndices;
     }
-
+    // 检查输入的金字塔层级是否合规
     const bool bCheckLevels = (minLevel>0) || (maxLevel>=0);
-
+    // 遍历范围内所有网格
     for(int ix = nMinCellX; ix<=nMaxCellX; ix++)
     {
         for(int iy = nMinCellY; iy<=nMaxCellY; iy++)
         {
+            // 获取网格内的所有特征点,mGridRight存的是双目相机里另一个相机的图
             const vector<size_t> vCell = (!bRight) ? mGrid[ix][iy] : mGridRight[ix][iy];
             if(vCell.empty())
                 continue;
-
+            // 遍历每个特征点，判断特征点是否在范围内
             for(size_t j=0, jend=vCell.size(); j<jend; j++)
             {
+                // mvKeysUn存的是无畸变坐标，如果是双目的话这个是没用的，因为双目相机在用之前必须校正；因此这里作了个判断
                 const cv::KeyPoint &kpUn = (Nleft == -1) ? mvKeysUn[vCell[j]]
                                                          : (!bRight) ? mvKeys[vCell[j]]
                                                                      : mvKeysRight[vCell[j]];

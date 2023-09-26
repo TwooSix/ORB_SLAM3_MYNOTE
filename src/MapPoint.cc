@@ -489,7 +489,7 @@ void MapPoint::UpdateNormalAndDepth()
         unique_lock<mutex> lock3(mMutexPos);
         mfMaxDistance = dist*levelScaleFactor;
         mfMinDistance = mfMaxDistance/pRefKF->mvScaleFactors[nLevels-1];
-        mNormalVector = normal/n;
+        mNormalVector = no       rmal/n;
     }
 }
 

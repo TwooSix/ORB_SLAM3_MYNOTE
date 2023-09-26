@@ -111,7 +111,7 @@ namespace ORB_SLAM3
 
         // Compute ratio of scores
         if(SH+SF == 0.f) return false;
-        float RH = SH/(SH+SF);
+        float RH = SH/(SH+SF); // H得分所占总得分的比例
 
         float minParallax = 1.0;
 
@@ -230,11 +230,11 @@ namespace ORB_SLAM3
     }
 
     Eigen::Matrix3f TwoViewReconstruction::ComputeH21(const vector<cv::Point2f> &vP1, const vector<cv::Point2f> &vP2)
-    {
+    {  
         const int N = vP1.size();
 
         Eigen::MatrixXf A(2*N, 9);
-
+        // 构建方程组矩阵
         for(int i=0; i<N; i++)
         {
             const float u1 = vP1[i].x;
@@ -263,9 +263,9 @@ namespace ORB_SLAM3
             A(2*i+1,8) = -u2;
 
         }
-
+        // 奇异值分解
         Eigen::JacobiSVD<Eigen::MatrixXf> svd(A, Eigen::ComputeFullV);
-
+        // 提取V的最后一列，构造成3x3的矩阵即为单应矩阵
         Eigen::Matrix<float,3,3,Eigen::RowMajor> H(svd.matrixV().col(8).data());
 
         return H;
@@ -276,7 +276,7 @@ namespace ORB_SLAM3
         const int N = vP1.size();
 
         Eigen::MatrixXf A(N, 9);
-
+        // 构建方程组矩阵
         for(int i=0; i<N; i++)
         {
             const float u1 = vP1[i].x;
@@ -294,16 +294,17 @@ namespace ORB_SLAM3
             A(i,7) = v1;
             A(i,8) = 1;
         }
-
+        // 奇异值分解
         Eigen::JacobiSVD<Eigen::MatrixXf> svd(A, Eigen::ComputeFullU | Eigen::ComputeFullV);
-
+        // 取特征值最小的特征向量，构造3x3矩阵得到处理前的F矩阵
         Eigen::Matrix<float,3,3,Eigen::RowMajor> Fpre(svd.matrixV().col(8).data());
-
+        // 对Fpre再SVD分解
         Eigen::JacobiSVD<Eigen::Matrix3f> svd2(Fpre, Eigen::ComputeFullU | Eigen::ComputeFullV);
-
+        // 取出特征值最小的特征向量
         Eigen::Vector3f w = svd2.singularValues();
+        // 把最小的奇异值设置为0，保证秩为2
         w(2) = 0;
-
+        // 重新构造回去，得到秩为2的F矩阵
         return svd2.matrixU() * Eigen::DiagonalMatrix<float,3>(w) * svd2.matrixV().transpose();
     }
 
@@ -341,7 +342,7 @@ namespace ORB_SLAM3
 
         for(int i=0; i<N; i++)
         {
-            bool bIn = true;
+            bool bIn = true; // 标志位，false则为离群点
 
             const cv::KeyPoint &kp1 = mvKeys1[mvMatches12[i].first];
             const cv::KeyPoint &kp2 = mvKeys2[mvMatches12[i].second];
@@ -353,7 +354,7 @@ namespace ORB_SLAM3
 
             // Reprojection error in first image
             // x2in1 = H12*x2
-
+            // 通过H12计算投影误差
             const float w2in1inv = 1.0/(h31inv*u2+h32inv*v2+h33inv);
             const float u2in1 = (h11inv*u2+h12inv*v2+h13inv)*w2in1inv;
             const float v2in1 = (h21inv*u2+h22inv*v2+h23inv)*w2in1inv;
@@ -363,13 +364,13 @@ namespace ORB_SLAM3
             const float chiSquare1 = squareDist1*invSigmaSquare;
 
             if(chiSquare1>th)
-                bIn = false;
+                bIn = false; // 离群点，不打分
             else
-                score += th - chiSquare1;
+                score += th - chiSquare1; // 累计分数
 
             // Reprojection error in second image
             // x1in2 = H21*x1
-
+            // 通过H21计算投影误差
             const float w1in2inv = 1.0/(h31*u1+h32*v1+h33);
             const float u1in2 = (h11*u1+h12*v1+h13)*w1in2inv;
             const float v1in2 = (h21*u1+h22*v1+h23)*w1in2inv;
@@ -382,7 +383,7 @@ namespace ORB_SLAM3
                 bIn = false;
             else
                 score += th - chiSquare2;
-
+            // 如果两次投影都满足条件，则为内点，标记一下后面用
             if(bIn)
                 vbMatchesInliers[i]=true;
             else
@@ -414,7 +415,7 @@ namespace ORB_SLAM3
         const float thScore = 5.991;
 
         const float invSigmaSquare = 1.0/(sigma*sigma);
-
+        // 遍历所有匹配点对
         for(int i=0; i<N; i++)
         {
             bool bIn = true;
@@ -429,13 +430,13 @@ namespace ORB_SLAM3
 
             // Reprojection error in second image
             // l2=F21x1=(a2,b2,c2)
-
+            // 根据p1和F计算极线l2
             const float a2 = f11*u1+f12*v1+f13;
             const float b2 = f21*u1+f22*v1+f23;
             const float c2 = f31*u1+f32*v1+f33;
 
             const float num2 = a2*u2+b2*v2+c2;
-
+            // 计算p2到极线的距离
             const float squareDist1 = num2*num2/(a2*a2+b2*b2);
 
             const float chiSquare1 = squareDist1*invSigmaSquare;
@@ -464,7 +465,7 @@ namespace ORB_SLAM3
                 score += thScore - chiSquare2;
 
             if(bIn)
-                vbMatchesInliers[i]=true;
+                vbMatchesInliers[i]=true; 
             else
                 vbMatchesInliers[i]=false;
         }
@@ -741,7 +742,7 @@ namespace ORB_SLAM3
         const int N = vKeys.size();
 
         vNormalizedPoints.resize(N);
-
+        // 求X,Y平均值
         for(int i=0; i<N; i++)
         {
             meanX += vKeys[i].pt.x;
@@ -753,7 +754,7 @@ namespace ORB_SLAM3
 
         float meanDevX = 0;
         float meanDevY = 0;
-
+        // 求X,Y的标准差
         for(int i=0; i<N; i++)
         {
             vNormalizedPoints[i].x = vKeys[i].pt.x - meanX;
@@ -765,7 +766,7 @@ namespace ORB_SLAM3
 
         meanDevX = meanDevX/N;
         meanDevY = meanDevY/N;
-
+        // 通过均值方差标准化
         float sX = 1.0/meanDevX;
         float sY = 1.0/meanDevY;
 
@@ -774,7 +775,7 @@ namespace ORB_SLAM3
             vNormalizedPoints[i].x = vNormalizedPoints[i].x * sX;
             vNormalizedPoints[i].y = vNormalizedPoints[i].y * sY;
         }
-
+        // 归一化矩阵（归一化方程写成的矩阵形式）
         T.setZero();
         T(0,0) = sX;
         T(1,1) = sY;
@@ -788,18 +789,20 @@ namespace ORB_SLAM3
                                        const Eigen::Matrix3f &K, vector<cv::Point3f> &vP3D, float th2, vector<bool> &vbGood, float &parallax)
     {
         // Calibration parameters
+        // 相机内参
         const float fx = K(0,0);
         const float fy = K(1,1);
         const float cx = K(0,2);
         const float cy = K(1,2);
 
-        vbGood = vector<bool>(vKeys1.size(),false);
-        vP3D.resize(vKeys1.size());
+        vbGood = vector<bool>(vKeys1.size(),false); // 标志位，true代表当前三维点合格
+        vP3D.resize(vKeys1.size()); // 三维点
 
-        vector<float> vCosParallax;
+        vector<float> vCosParallax; // 视差
         vCosParallax.reserve(vKeys1.size());
 
         // Camera 1 Projection Matrix K[I|0]
+        // 第一帧的投影矩阵
         Eigen::Matrix<float,3,4> P1;
         P1.setZero();
         P1.block<3,3>(0,0) = K;
@@ -808,17 +811,19 @@ namespace ORB_SLAM3
         O1.setZero();
 
         // Camera 2 Projection Matrix K[R|t]
+        // 第二帧的投影矩阵
         Eigen::Matrix<float,3,4> P2;
         P2.block<3,3>(0,0) = R;
         P2.block<3,1>(0,3) = t;
         P2 = K * P2;
 
-        Eigen::Vector3f O2 = -R.transpose() * t;
+        Eigen::Vector3f O2 = -R.transpose() * t; // 第二帧相机光心在第一帧相机坐标系下的坐标
 
         int nGood=0;
-
+        // 遍历所有匹配点对
         for(size_t i=0, iend=vMatches12.size();i<iend;i++)
         {
+            // 离群点，跳过
             if(!vbMatchesInliers[i])
                 continue;
 
@@ -828,10 +833,10 @@ namespace ORB_SLAM3
             Eigen::Vector3f p3dC1;
             Eigen::Vector3f x_p1(kp1.pt.x, kp1.pt.y, 1);
             Eigen::Vector3f x_p2(kp2.pt.x, kp2.pt.y, 1);
-
+            // 三角化得到三维点
             GeometricTools::Triangulate(x_p1, x_p2, P1, P2, p3dC1);
 
-
+            // 1. 坐标值不能是无穷大
             if(!isfinite(p3dC1(0)) || !isfinite(p3dC1(1)) || !isfinite(p3dC1(2)))
             {
                 vbGood[vMatches12[i].first]=false;
@@ -839,25 +844,27 @@ namespace ORB_SLAM3
             }
 
             // Check parallax
-            Eigen::Vector3f normal1 = p3dC1 - O1;
+            Eigen::Vector3f normal1 = p3dC1 - O1; // 三维点到第一帧相机光心的向量
             float dist1 = normal1.norm();
 
-            Eigen::Vector3f normal2 = p3dC1 - O2;
+            Eigen::Vector3f normal2 = p3dC1 - O2; // 三维点到第二帧相机光心的向量
             float dist2 = normal2.norm();
 
-            float cosParallax = normal1.dot(normal2) / (dist1*dist2);
+            float cosParallax = normal1.dot(normal2) / (dist1*dist2); // 两个向量夹角的余弦值
 
             // Check depth in front of first camera (only if enough parallax, as "infinite" points can easily go to negative depth)
+            // 2. 3. 深度必须为正，且视差不能过小
             if(p3dC1(2)<=0 && cosParallax<0.99998)
                 continue;
 
             // Check depth in front of second camera (only if enough parallax, as "infinite" points can easily go to negative depth)
-            Eigen::Vector3f p3dC2 = R * p3dC1 + t;
+            Eigen::Vector3f p3dC2 = R * p3dC1 + t; // 三维点在第二帧相机坐标系下的坐标
 
             if(p3dC2(2)<=0 && cosParallax<0.99998)
                 continue;
 
             // Check reprojection error in first image
+            // 重投影误差需要小于阈值
             float im1x, im1y;
             float invZ1 = 1.0/p3dC1(2);
             im1x = fx*p3dC1(0)*invZ1+cx;
@@ -878,21 +885,21 @@ namespace ORB_SLAM3
 
             if(squareError2>th2)
                 continue;
-
+            // 存储视差和三维点
             vCosParallax.push_back(cosParallax);
             vP3D[vMatches12[i].first] = cv::Point3f(p3dC1(0), p3dC1(1), p3dC1(2));
             nGood++;
-
+            // 标记合格
             if(cosParallax<0.99998)
                 vbGood[vMatches12[i].first]=true;
         }
-
+        // 选一个比较小的视差角代表本次三角化结果的检测结果，用于检验RT矩阵的好坏
         if(nGood>0)
         {
-            sort(vCosParallax.begin(),vCosParallax.end());
+            sort(vCosParallax.begin(),vCosParallax.end()); // 视差角排序
 
             size_t idx = min(50,int(vCosParallax.size()-1));
-            parallax = acos(vCosParallax[idx])*180/CV_PI;
+            parallax = acos(vCosParallax[idx])*180/CV_PI; // 选取一个比较小的视差角（若满50个则取第50个，否则取视差角最小的那个）
         }
         else
             parallax=0;

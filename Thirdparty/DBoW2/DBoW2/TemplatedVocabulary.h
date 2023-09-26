@@ -1141,26 +1141,28 @@ void TemplatedVocabulary<TDescriptor,F>::transform(
   bool must = m_scoring_object->mustNormalize(norm);
   
   typename vector<TDescriptor>::const_iterator fit;
-  
+  // 单词的权重类型为TF/TF_IDF
   if(m_weighting == TF || m_weighting == TF_IDF)
   {
     unsigned int i_feature = 0;
+    // 遍历当前图像的所有特征点
     for(fit = features.begin(); fit < features.end(); ++fit, ++i_feature)
     {
-      WordId id;
-      NodeId nid;
-      WordValue w; 
+      WordId id; // 单词的id
+      NodeId nid; // 单词所属的子树对应的节点ID（叶节点-levelsup那一层的节点）
+      WordValue w;  // 单词的权重
       // w is the idf value if TF_IDF, 1 if TF
       
-      transform(*fit, id, w, &nid, levelsup);
+      transform(*fit, id, w, &nid, levelsup); // 遍历子树，搜索得到id，nid, w
       
       if(w > 0) // not stopped
       { 
+        // 添加进BowVector:v和FeatureVector:fv中
         v.addWeight(id, w);
         fv.addFeature(nid, i_feature);
       }
     }
-    
+    // 归一化BowVector的值
     if(!v.empty() && !must)
     {
       // unnecessary when normalizing
@@ -1223,9 +1225,11 @@ void TemplatedVocabulary<TDescriptor,F>::transform(const TDescriptor &feature,
   typename vector<NodeId>::const_iterator nit;
 
   // level at which the node must be stored in nid, if given
+  // 获取levelsup后对应的层级
   const int nid_level = m_L - levelsup;
   if(nid_level <= 0 && nid != NULL) *nid = 0; // root
 
+  // 从根节点开始搜索
   NodeId final_id = 0; // root
   int current_level = 0;
 
@@ -1244,16 +1248,19 @@ void TemplatedVocabulary<TDescriptor,F>::transform(const TDescriptor &feature,
       if(d < best_d)
       {
         best_d = d;
+        // 获取最优匹配的叶子节点id
         final_id = id;
       }
     }
     
     if(nid != NULL && current_level == nid_level)
+      // 如果搜索到了levelsup层级的节点，则存储当前节点的id到nid中
       *nid = final_id;
     
   } while( !m_nodes[final_id].isLeaf() );
 
   // turn node id into word id
+  // 获取单词id和权重
   word_id = m_nodes[final_id].word_id;
   weight = m_nodes[final_id].weight;
 }

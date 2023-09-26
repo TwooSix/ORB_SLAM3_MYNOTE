@@ -555,19 +555,26 @@ namespace ORB_SLAM3
     vector<cv::KeyPoint> ORBextractor::DistributeOctTree(const vector<cv::KeyPoint>& vToDistributeKeys, const int &minX,
                                                          const int &maxX, const int &minY, const int &maxY, const int &N, const int &level)
     {
+        """根据四叉树原理均摊特征点数量
+
+        Returns:
+            _type_: _description_
+        """        
         // Compute how many initial nodes
+        // 计算初始节点数量，根据图像宽高比决定，尽量保证分裂的区域接近正方形
         const int nIni = round(static_cast<float>(maxX-minX)/(maxY-minY));
 
-        const float hX = static_cast<float>(maxX-minX)/nIni;
+        const float hX = static_cast<float>(maxX-minX)/nIni; // 每个初始节点的x大小
 
         list<ExtractorNode> lNodes;
 
         vector<ExtractorNode*> vpIniNodes;
         vpIniNodes.resize(nIni);
-
+        // 计算分裂的子节点，存到lNodes链表里
         for(int i=0; i<nIni; i++)
         {
             ExtractorNode ni;
+            // 计算节点的边界
             ni.UL = cv::Point2i(hX*static_cast<float>(i),0);
             ni.UR = cv::Point2i(hX*static_cast<float>(i+1),0);
             ni.BL = cv::Point2i(ni.UL.x,maxY-minY);
@@ -579,6 +586,7 @@ namespace ORB_SLAM3
         }
 
         //Associate points to childs
+        // 找到特征点对应的初始节点
         for(size_t i=0;i<vToDistributeKeys.size();i++)
         {
             const cv::KeyPoint &kp = vToDistributeKeys[i];
@@ -586,25 +594,28 @@ namespace ORB_SLAM3
         }
 
         list<ExtractorNode>::iterator lit = lNodes.begin();
-
+        // 遍历所有初始节点，设置节点状态
         while(lit!=lNodes.end())
         {
+            // 如果节点内只有一个特征点，则不可再分裂
             if(lit->vKeys.size()==1)
             {
                 lit->bNoMore=true;
                 lit++;
             }
+            // 如果节点内没有特征点，则删除该节点
             else if(lit->vKeys.empty())
                 lit = lNodes.erase(lit);
             else
                 lit++;
         }
 
-        bool bFinish = false;
+        bool bFinish = false; // 迭代结束标志
 
         int iteration = 0;
 
         vector<pair<int,ExtractorNode*> > vSizeAndPointerToNode;
+        // 将待分裂节点数组内存分配扩展到4倍
         vSizeAndPointerToNode.reserve(lNodes.size()*4);
 
         while(!bFinish)
@@ -615,12 +626,14 @@ namespace ORB_SLAM3
 
             lit = lNodes.begin();
 
-            int nToExpand = 0;
+            int nToExpand = 0; // 需要继续分裂的节点数量
 
             vSizeAndPointerToNode.clear();
-
+            // 分裂子节点
             while(lit!=lNodes.end())
             {
+
+                // 如果是不能分裂的状态，则跳过
                 if(lit->bNoMore)
                 {
                     // If node only contains one point do not subdivide and continue
@@ -631,16 +644,21 @@ namespace ORB_SLAM3
                 {
                     // If more than one point, subdivide
                     ExtractorNode n1,n2,n3,n4;
+                    // 分裂成4块
                     lit->DivideNode(n1,n2,n3,n4);
 
                     // Add childs if they contain points
+                    // 如果子节点有特征点，则加入到lNodes链表中
                     if(n1.vKeys.size()>0)
                     {
                         lNodes.push_front(n1);
+                        // 若特征点数量大于1
                         if(n1.vKeys.size()>1)
                         {
-                            nToExpand++;
+                            nToExpand++; // 可分裂节点数量+1
+                            // 添加进可分裂节点的列表里
                             vSizeAndPointerToNode.push_back(make_pair(n1.vKeys.size(),&lNodes.front()));
+                            // 存储自己的迭代器
                             lNodes.front().lit = lNodes.begin();
                         }
                     }
@@ -651,6 +669,7 @@ namespace ORB_SLAM3
                         {
                             nToExpand++;
                             vSizeAndPointerToNode.push_back(make_pair(n2.vKeys.size(),&lNodes.front()));
+
                             lNodes.front().lit = lNodes.begin();
                         }
                     }
@@ -674,7 +693,7 @@ namespace ORB_SLAM3
                             lNodes.front().lit = lNodes.begin();
                         }
                     }
-
+                    // 删除母节点，得到下一个节点的迭代器
                     lit=lNodes.erase(lit);
                     continue;
                 }
@@ -682,10 +701,12 @@ namespace ORB_SLAM3
 
             // Finish if there are more nodes than required features
             // or all nodes contain just one point
+            // 1. 如果节点数量>=设定的所需的特征点数量，2. 节点无法继续分裂，则停止
             if((int)lNodes.size()>=N || (int)lNodes.size()==prevSize)
             {
                 bFinish = true;
             }
+            // 若下一次分裂后节点数量就超过了，则开始慢慢分裂，直到节点数量达到设定值就退出
             else if(((int)lNodes.size()+nToExpand*3)>N)
             {
 
@@ -696,7 +717,7 @@ namespace ORB_SLAM3
 
                     vector<pair<int,ExtractorNode*> > vPrevSizeAndPointerToNode = vSizeAndPointerToNode;
                     vSizeAndPointerToNode.clear();
-
+                    // 优先分裂特征点数量多的节点
                     sort(vPrevSizeAndPointerToNode.begin(),vPrevSizeAndPointerToNode.end(),compareNodes);
                     for(int j=vPrevSizeAndPointerToNode.size()-1;j>=0;j--)
                     {
@@ -757,6 +778,7 @@ namespace ORB_SLAM3
         // Retain the best point in each node
         vector<cv::KeyPoint> vResultKeys;
         vResultKeys.reserve(nfeatures);
+        // 每个节点内选出响应值最大的特征点作为最终的特征点
         for(list<ExtractorNode>::iterator lit=lNodes.begin(); lit!=lNodes.end(); lit++)
         {
             vector<cv::KeyPoint> &vNodeKeys = lit->vKeys;
@@ -1172,7 +1194,7 @@ namespace ORB_SLAM3
         for (int level = 0; level < nlevels; ++level)
         {
             float scale = mvInvScaleFactor[level];
-            Size sz(cvRound((float)image.cols*scale), cvRound((float)image.rows*scale));
+            Size sz(cvRound((float)image.cols*scale), cvRound((float)image.rows*scale)); //缩放后的图像尺寸
             Size wholeSize(sz.width + EDGE_THRESHOLD*2, sz.height + EDGE_THRESHOLD*2);
             Mat temp(wholeSize, image.type()), masktemp;
             mvImagePyramid[level] = temp(Rect(EDGE_THRESHOLD, EDGE_THRESHOLD, sz.width, sz.height));
@@ -1180,13 +1202,16 @@ namespace ORB_SLAM3
             // Compute the resized image
             if( level != 0 )
             {
+                // 缩放图像
                 resize(mvImagePyramid[level-1], mvImagePyramid[level], sz, 0, 0, INTER_LINEAR);
 
+                // 添加边缘（让边缘点也能作为特征点）
                 copyMakeBorder(mvImagePyramid[level], temp, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD,
                                BORDER_REFLECT_101+BORDER_ISOLATED);
             }
             else
             {
+                // 第一层无需缩放
                 copyMakeBorder(image, temp, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD, EDGE_THRESHOLD,
                                BORDER_REFLECT_101);
             }
